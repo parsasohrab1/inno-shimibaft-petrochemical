@@ -16,6 +16,16 @@ DATA_DIR = Path(os.getenv("DATA_DIR", REPO / "data")).resolve()
 DB_PATH = DATA_DIR / "spro.db"
 FRONTEND_DIST_DIR = REPO / "frontend" / "dist"
 
+# backend/app/ml/ — trained-model cache (joblib bundle + metrics.json).
+# Decoupled from DATA_DIR on purpose: tests reset DATA_DIR per test for DB
+# isolation, but training a real model per test would be far too slow, so
+# tests point MODELS_DIR at one shared, pre-trained, session-scoped
+# directory instead (see backend/tests/conftest.py).
+MODELS_DIR = Path(os.getenv("MODELS_DIR", DATA_DIR / "models")).resolve()
+AUTO_TRAIN_MODELS = os.getenv("AUTO_TRAIN_MODELS", "1") == "1"
+TRAIN_N_POINTS = int(os.getenv("TRAIN_N_POINTS", "20000"))
+TRAIN_SEED = int(os.getenv("TRAIN_SEED", "42"))
+
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me-please-0123456789")
 TOKEN_TTL_MINUTES = int(os.getenv("TOKEN_TTL_MINUTES", "480"))
 DEMO_PASSWORD = os.getenv("DEMO_PASSWORD", "Demo@12345")

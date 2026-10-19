@@ -15,7 +15,7 @@ export const messages = {
       forecast: "ماژول ۴ — پیش‌بینی و تصمیم‌یار",
     },
     scaffoldNotice:
-      "اسکلت — داده نمونه برچسب‌دار؛ بدون اتصال واقعی به DCS/Historian/LIMS و بدون مدل یادگیری ماشین آموزش‌دیده.",
+      "داده نمونه برچسب‌دار؛ بدون اتصال واقعی به DCS/Historian/LIMS. مدل‌های یادگیری ماشین واقعی هستند اما فقط روی داده سنتتیک آموزش دیده‌اند — نه داده واقعی کارخانه شیمی بافت.",
   },
   en: {
     title: "SPRO1 — Shimi Baft",
@@ -31,6 +31,6 @@ export const messages = {
       forecast: "Module 4 — Forecasting & Decision Support",
     },
     scaffoldNotice:
-      "Scaffold — labelled sample data only; no real DCS/Historian/LIMS connection and no trained ML model.",
+      "Labelled sample data; no real DCS/Historian/LIMS connection. The ML models are real but trained only on synthetic data — not real Shimi Baft plant data.",
   },
 } as const;

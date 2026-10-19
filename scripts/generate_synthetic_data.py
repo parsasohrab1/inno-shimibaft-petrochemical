@@ -31,13 +31,31 @@ import numpy as np
 import pandas as pd
 
 
-def generate_mtbe_synthetic_data(n_points: int = 10_000, freq_min: int = 1, seed: int = 42) -> pd.DataFrame:
+def generate_mtbe_synthetic_data(
+    n_points: int = 10_000,
+    freq_min: int = 1,
+    seed: int = 42,
+    upset_rate: float = 0.0,
+    upset_scale: float = 1.0,
+) -> pd.DataFrame:
     """Generate synthetic data for the MTBE unit, preserving basic physical relations.
 
     Args:
         n_points: number of time points to generate.
         freq_min: spacing between points, in minutes.
         seed: random seed, for reproducibility.
+        upset_rate: EXTENSION beyond the original SRS function (default 0.0
+            reproduces the original output exactly, bit-for-bit). When > 0,
+            occasional temporary "upset" windows are added to reactor
+            temperature and the methanol:isobutylene ratio — e.g. a
+            setpoint excursion or a feed-quality hiccup — using the SAME
+            downstream purity/energy formulas below. This exists only so
+            backend/app/ml/ has enough genuine out-of-spec examples to
+            train/evaluate the module-3 OOS classifier on (see
+            backend/app/ml/synthetic.py); it does not change the physics
+            formula itself, only how far the inputs occasionally wander.
+        upset_scale: amplitude multiplier for upset windows (only matters
+            when upset_rate > 0).
 
     Returns:
         A DataFrame with columns: timestamp, reactor_temp_C, reactor_pressure_MPa,
@@ -50,7 +68,6 @@ def generate_mtbe_synthetic_data(n_points: int = 10_000, freq_min: int = 1, seed
 
     # Reactor temperature (74-77 C operating band per SRS tag TI-101, with controlled oscillation)
     reactor_temp = 75.5 + 1.2 * np.sin(0.1 * t) + rng.normal(0, 0.3, n_points)
-    reactor_temp = np.clip(reactor_temp, 74.0, 77.0)
 
     # Reactor pressure (0.69-1.38 MPa per SRS tag PI-102)
     pressure = 1.0 + 0.15 * np.sin(0.05 * t) + rng.normal(0, 0.05, n_points)
@@ -62,6 +79,26 @@ def generate_mtbe_synthetic_data(n_points: int = 10_000, freq_min: int = 1, seed
 
     # Methanol:isobutylene molar ratio — optimum around 1.1
     meoh_ratio = 1.1 + 0.05 * np.sin(0.15 * t) + rng.normal(0, 0.02, n_points)
+
+    if upset_rate > 0:
+        # EXTENSION (see docstring): occasional multi-point upset windows
+        # pushing temperature and feed ratio further from their setpoints
+        # than normal operation ever would, so that enough real OOS events
+        # exist to train/evaluate a classifier on. Applied BEFORE clipping
+        # reactor_temp, so the same 74-77 clip below still represents the
+        # instrument's physical measurement range.
+        n_upsets = rng.poisson(upset_rate * n_points)
+        for _ in range(n_upsets):
+            start = rng.integers(0, n_points)
+            width = rng.integers(5, 40)
+            end = min(n_points, start + width)
+            temp_bump = rng.normal(0, 1.8 * upset_scale)
+            ratio_bump = rng.normal(0, 0.12 * upset_scale)
+            window = np.hanning(end - start)  # smooth ramp up/down, not a step
+            reactor_temp[start:end] += temp_bump * window
+            meoh_ratio[start:end] += ratio_bump * window
+
+    reactor_temp = np.clip(reactor_temp, 74.0, 77.0)
 
     # MTBE purity (%) — degrades with distance from optimal temperature/ratio
     purity = (

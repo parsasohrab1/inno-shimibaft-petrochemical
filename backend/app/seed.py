@@ -1,10 +1,21 @@
 """Seed a small amount of clearly-labelled sample data.
 
-This is NOT a physics-informed simulator (unlike the Khorasan Petrochemical
-SEM project on this account) — it is just enough illustrative, randomly
-generated data for the API and frontend to have something to show while
-real DCS/Historian/LIMS integration (see ``services/dcs_ingest.py``) does
-not exist yet. Every row is tagged ``is_sample = 1``.
+Mostly still NOT a physics-informed simulator (unlike the Khorasan
+Petrochemical SEM project on this account) — most rows are illustrative,
+randomly generated data for the API and frontend to have something to
+show while real DCS/Historian/LIMS integration (see
+``services/dcs_ingest.py``) does not exist yet. Every row is tagged
+``is_sample = 1``.
+
+EXCEPTION: the 5 tags backend/app/ml/synthetic.py trains real operating
+envelopes for (TI-101, PI-102, FI-103, FI-301, EI-401) now get their demo
+``historian_samples`` ticker from the SAME physics-informed generator
+(``generate_mtbe_synthetic_data``) those envelopes are trained on, rather
+than an independent uniform-random band. This was a real bug caught while
+testing: the old uniform-random ticker routinely fell outside the
+generator's much narrower physical range, making the UI show "out of
+range" on tags that were not actually deviating — just inconsistent
+between two unrelated synthetic sources.
 
 The first eight tags (TI-101 ... EI-401) and their normal ranges are taken
 verbatim from docs/SRS.md section 3.2.2 (the SRS pushed to this product's
@@ -22,6 +33,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .db import connect, init_db, one
+from .ml.synthetic import TAG_TO_SYNTHETIC_COLUMN, generate_mtbe_synthetic_data
 from .security import hash_password
 
 SEED = 42
@@ -68,6 +80,25 @@ def seed() -> None:
                 (username, full_name, role, pw),
             )
 
+        # For the 5 tags backend/app/ml/synthetic.py models (TI-101, PI-102,
+        # FI-103, FI-301, EI-401), the illustrative "live" ticker is sampled
+        # from the SAME physics-informed generator those tags' trained
+        # operating envelopes come from — not an independent uniform random
+        # band. Mixing the two (as this scaffold originally did) made the
+        # demo ticker disagree with the trained model's own range on almost
+        # every page load (e.g. FI-103 showing "out of range" just because
+        # the random ticker and the generator's narrow physical range don't
+        # overlap), which is a real but misleading inconsistency, not an
+        # actual process deviation.
+        synth = generate_mtbe_synthetic_data(n_points=60, freq_min=15, seed=SEED)
+        synth_columns = {
+            "TI-101": synth["reactor_temp_C"],
+            "PI-102": synth["reactor_pressure_MPa"],
+            "FI-103": synth["feed_flow_kg_h"],
+            "FI-301": synth["feed_flow_kg_h"] * (synth["mtbe_purity_pct"] / 100.0),  # product_flow_kg_h proxy
+            "EI-401": synth["energy_intensity_GJ_t"],
+        }
+
         for tag_id, unit, desc, uom, lo, hi in TAGS:
             conn.execute(
                 "INSERT INTO process_tags(tag_id, unit, description, measurement_unit, normal_min, normal_max, source) "
@@ -75,14 +106,22 @@ def seed() -> None:
                 (tag_id, unit, desc, uom, lo, hi),
             )
             # a short illustrative history per tag
-            for i in range(60):
-                mid = (lo + hi) / 2
-                span = (hi - lo) / 2
-                value = mid + random.uniform(-span, span) * 0.6
-                conn.execute(
-                    "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
-                    (tag_id, _now_minus((60 - i) * 15), round(value, 3)),
-                )
+            if tag_id in TAG_TO_SYNTHETIC_COLUMN:
+                series = synth_columns[tag_id]
+                for i in range(60):
+                    conn.execute(
+                        "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
+                        (tag_id, _now_minus((60 - i) * 15), round(float(series.iloc[i]), 3)),
+                    )
+            else:
+                for i in range(60):
+                    mid = (lo + hi) / 2
+                    span = (hi - lo) / 2
+                    value = mid + random.uniform(-span, span) * 0.6
+                    conn.execute(
+                        "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
+                        (tag_id, _now_minus((60 - i) * 15), round(value, 3)),
+                    )
 
         feed_types = [
             ("C4 Raffinate-1 (mixed C4)", "ایزوبوتیلن ~45%، نرمال‌بوتان و بوتن‌های دیگر"),

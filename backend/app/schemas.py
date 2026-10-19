@@ -21,4 +21,21 @@ class WhatIfRequest(BaseModel):
 
 
 class RecommendationAction(BaseModel):
+    """Module 4 — one append-only accept/reject audit entry (NFR-06).
+
+    Never mutates the original recommendations row; see
+    services/forecasting_decision.py's ``record_decision``.
+    """
+
     status: str  # "accepted" | "rejected"
+    note: str | None = None
+
+
+class AddRecommendationRequest(BaseModel):
+    module: str
+    title: str
+    detail: str | None = None
+    impact: str | None = None
+    confidence: float = 0.5
+    suggested_action: dict | None = None
+    expected_effect: dict | None = None

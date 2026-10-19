@@ -74,6 +74,14 @@ CREATE TABLE IF NOT EXISTS lab_samples(
 );
 
 -- Module 4: Production Forecasting & Real-Time Operational Decision Support
+--
+-- ``recommendations`` rows are IMMUTABLE once inserted (NFR-06): their
+-- ``status`` column is written once at INSERT time ('pending') and never
+-- UPDATEd again. Every operator accept/reject is a NEW row in
+-- ``recommendation_decisions`` instead — an append-only audit trail
+-- (Khorasan Petrochemical SEM project's advisory-mode pattern on this
+-- account). The "current" status of a recommendation is derived by
+-- looking at its latest decision row, not stored destructively.
 CREATE TABLE IF NOT EXISTS recommendations(
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   module TEXT NOT NULL,
@@ -81,10 +89,21 @@ CREATE TABLE IF NOT EXISTS recommendations(
   detail TEXT,
   impact TEXT,
   confidence REAL,
+  suggested_action TEXT,   -- JSON: {"parameter": ..., "delta_pct": ...}
+  expected_effect TEXT,    -- JSON: {"production_delta_kg_h": ..., "purity_delta_pct": ..., "energy_intensity_delta_pct": ...}
   status TEXT NOT NULL DEFAULT 'pending',
   created_at TEXT NOT NULL,
   is_sample INTEGER NOT NULL DEFAULT 1
 );
+CREATE TABLE IF NOT EXISTS recommendation_decisions(
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  rec_id INTEGER NOT NULL,
+  decision TEXT NOT NULL,   -- 'accepted' | 'rejected'
+  actor_username TEXT,
+  note TEXT,
+  ts TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ix_rec_decisions_rec ON recommendation_decisions(rec_id, ts);
 """
 
 

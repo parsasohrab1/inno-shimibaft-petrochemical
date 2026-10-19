@@ -29,7 +29,7 @@ from .db import connect, init_db, scalar
 from .routers import auth, energy_feedstock, forecasting_decision, process_intelligence, quality_prediction
 
 log = logging.getLogger("spro")
-_state = {"seeding": False, "ready": False}
+_state = {"seeding": False, "ready": False, "training_models": False, "models_ready": False}
 
 
 def _ensure_data():
@@ -43,6 +43,26 @@ def _ensure_data():
         _state.update(seeding=False, ready=True)
 
 
+def _ensure_models():
+    """Background-train modules 1-4's real models on synthetic data if no
+    cached artifact bundle exists yet — mirrors ``_ensure_data`` above.
+    Trained on synthetic data only; see backend/app/ml/__init__.py.
+    """
+    from .ml import registry
+    from .ml.train import train_all
+
+    if registry.is_ready():
+        _state["models_ready"] = True
+        return
+    _state["training_models"] = True
+    try:
+        train_all(out_dir=config.MODELS_DIR, n_points=config.TRAIN_N_POINTS, seed=config.TRAIN_SEED)
+    except Exception:  # pragma: no cover
+        log.exception("model training failed")
+    finally:
+        _state.update(training_models=False, models_ready=registry.is_ready())
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
@@ -53,6 +73,12 @@ async def lifespan(app: FastAPI):
         threading.Thread(target=_ensure_data, daemon=True).start()
     else:
         _state["ready"] = True
+    if config.AUTO_TRAIN_MODELS:
+        threading.Thread(target=_ensure_models, daemon=True).start()
+    else:
+        from .ml import registry as _registry
+
+        _state["models_ready"] = _registry.is_ready()
     yield
 
 

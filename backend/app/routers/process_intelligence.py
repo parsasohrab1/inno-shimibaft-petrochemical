@@ -26,3 +26,15 @@ def tag_envelope(tag_id: str, conn: sqlite3.Connection = Depends(get_conn), _=De
 @router.get("/variability-flags")
 def variability_flags(conn: sqlite3.Connection = Depends(get_conn), _=Depends(current_user)):
     return svc.variability_flags(conn)
+
+
+@router.get("/operating-envelopes")
+def operating_envelopes(_=Depends(current_user)):
+    """FR-M1-02 — trained data-driven envelopes + 95% CI for all modelled tags."""
+    return svc.operating_envelopes()
+
+
+@router.get("/productivity-correlation")
+def productivity_correlation(_=Depends(current_user)):
+    """FR-M1-03 — measured multivariate R^2 against the productivity proxy."""
+    return svc.productivity_correlation()

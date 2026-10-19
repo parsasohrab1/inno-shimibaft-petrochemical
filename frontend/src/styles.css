@@ -61,3 +61,79 @@ th, td {
 .status-red { color: #c0392b; font-weight: bold; }
 .status-yellow { color: #b7950b; font-weight: bold; }
 .status-green { color: #1e8449; font-weight: bold; }
+
+.badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  padding: 0.1rem 0.5rem;
+  border-radius: 10px;
+  margin-inline-start: 0.4rem;
+}
+.badge-ok { background: #e7f6ec; color: #1e8449; }
+.badge-warn { background: #fff3cd; color: #8a6d00; }
+.badge-bad { background: #fdecea; color: #c0392b; }
+.badge-model { background: #eaf1fb; color: #103a5c; }
+
+.rangebar {
+  position: relative;
+  height: 10px;
+  background: #e9ecef;
+  border-radius: 5px;
+  margin: 0.25rem 0;
+  min-width: 120px;
+}
+.rangebar .fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: #5b8def;
+  border-radius: 5px;
+}
+.rangebar .marker {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 3px;
+  background: #103a5c;
+}
+
+.bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
+  margin: 0.5rem 0;
+}
+.bars .bar {
+  flex: 1;
+  background: #5b8def;
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+  position: relative;
+}
+.bars .bar.negative { background: #c0392b; }
+
+.note {
+  font-size: 0.8rem;
+  color: #666;
+  margin: 0.25rem 0;
+}
+.warning-text {
+  font-size: 0.85rem;
+  color: #b7950b;
+}
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+@media (max-width: 720px) {
+  .grid-2 { grid-template-columns: 1fr; }
+}
+.scenario-card {
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  margin-bottom: 0.5rem;
+}
+.scenario-card.best { border-color: #1e8449; background: #f3fbf6; }
