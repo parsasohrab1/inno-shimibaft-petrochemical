@@ -110,7 +110,7 @@ export default function ProcessOverview({ overview }: { overview: Overview | nul
               <tr key={id}>
                 <td>{node.label}</td>
                 <td>
-                  <TrafficLight status={node.status} label={node.status_label} />
+                  <TrafficLight status={node.status} label={node.status_label} size="lg" />
                 </td>
                 <td>{node.tag_ids.length ? node.tag_ids.join("، ") : node.derived_from ? `وضعیت از ${node.derived_from} گرفته شده` : "—"}</td>
               </tr>

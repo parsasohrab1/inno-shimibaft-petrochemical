@@ -23,6 +23,16 @@ def tag_envelope(tag_id: str, conn: sqlite3.Connection = Depends(get_conn), _=De
     return result
 
 
+@router.get("/tags/{tag_id}/history")
+def tag_history(tag_id: str, limit: int = 60, conn: sqlite3.Connection = Depends(get_conn), _=Depends(current_user)):
+    """Recent historian points for one tag (oldest first) — feeds the
+    dashboard's trend sparkline next to the tag's current value."""
+    result = svc.tag_history(conn, tag_id, limit=limit)
+    if result is None:
+        raise HTTPException(404, "تگ یافت نشد")
+    return result
+
+
 @router.get("/variability-flags")
 def variability_flags(conn: sqlite3.Connection = Depends(get_conn), _=Depends(current_user)):
     return svc.variability_flags(conn)

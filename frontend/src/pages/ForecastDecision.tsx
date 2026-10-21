@@ -1,5 +1,10 @@
 import { FormEvent, useEffect, useState } from "react";
 import { AuthError, api } from "../api";
+import BarList from "../components/BarList";
+import Collapsible from "../components/Collapsible";
+import KpiCard from "../components/KpiCard";
+import LineChart from "../components/LineChart";
+import RecommendationCard from "../components/RecommendationCard";
 
 type Outlook = {
   ready: boolean;
@@ -51,12 +56,29 @@ type Recommendation = {
   created_at: string;
 };
 
+function Delta({ before, after }: { before: number; after: number }) {
+  const diff = after - before;
+  if (Math.abs(diff) < 1e-9) return <span className="note">بدون تغییر</span>;
+  return (
+    <span className="note">
+      {diff > 0 ? "▲" : "▼"} {Math.abs(diff).toFixed(2)}
+    </span>
+  );
+}
+
 /** Module 4 — FR-M4-01..03 (docs/SRS.md section 3.1.4).
  * outlook/what-if/scenarios are now real (Holt's forecaster + a genuine
  * cross-module re-simulation through modules 2-3 — see
  * backend/app/ml/module4_forecast.py). Recommendations carry a
  * suggested_action + expected_effect and an append-only accept/reject
- * audit trail (NFR-06) — the original row is never mutated. */
+ * audit trail (NFR-06) — the original row is never mutated.
+ *
+ * Presentation rewritten: the forecast becomes a labelled line chart
+ * (kept honest — no fabricated confidence band, since the Holt model
+ * doesn't return one), scenario ranking becomes ranked bar cards, the
+ * what-if table gets a Δ column, and recommendations render as the new
+ * RecommendationCard (action/effect chips + accept/reject buttons)
+ * instead of plain text. */
 export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => void }) {
   const [outlook, setOutlook] = useState<Outlook | null>(null);
   const [param, setParam] = useState("reactor_temp_C");
@@ -115,7 +137,7 @@ export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => voi
   };
 
   const horizonSeries = outlook?.forecast_kg_h_by_horizon_h?.["8"] ?? [];
-  const maxSeries = Math.max(1, ...horizonSeries);
+  const maxScore = Math.max(1e-9, ...(scenarios?.scenarios.map((s) => Math.abs(s.score)) ?? [1]));
 
   return (
     <div className="card">
@@ -124,28 +146,33 @@ export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => voi
       <h3>پیش‌بینی نرخ تولید ۱ تا ۸ ساعت آینده (هولت) — FR-M4-01</h3>
       {outlook?.ready ? (
         <>
-          <p className="note">{outlook.data_source}</p>
-          <p className="note">{outlook.method}</p>
-          <div className="bars">
-            {horizonSeries.map((v, i) => (
-              <div key={i} className="bar" style={{ height: `${Math.max(2, (v / maxSeries) * 76)}px` }} title={`${v} kg/h`} />
-            ))}
+          <div className="kpi-grid">
+            <KpiCard
+              label="RMSE% کلی پیش‌بینی"
+              value={outlook.overall_rmse_pct}
+              unit="٪"
+              status={outlook.meets_target ? "good" : "bad"}
+              statusText={outlook.meets_target ? "برآورده شد" : "برآورده نشد"}
+              target={`هدف ≤ ${outlook.target_rmse_pct}٪`}
+            />
           </div>
-          <p className="note">نمودار بالا: پیش‌بینی ۸ ساعت آینده (هر میله ۱۵ دقیقه)، بر پایه سری مرجع سنتتیک</p>
-          <p>
-            RMSE% کلی:{" "}
-            <b className={outlook.meets_target ? "status-green" : "status-red"}>{outlook.overall_rmse_pct}٪</b>
-            {" "}(هدف ≤ {outlook.target_rmse_pct}٪)
-            <span className={`badge ${outlook.meets_target ? "badge-ok" : "badge-bad"}`}>
-              {outlook.meets_target ? "برآورده شد" : "برآورده نشد"}
-            </span>
-          </p>
-          <p className="note">
-            به تفکیک افق:{" "}
-            {Object.entries(outlook.measured_rmse_pct_by_horizon_h ?? {})
-              .map(([h, v]) => `${h}h: ${v}٪`)
-              .join(" | ")}
-          </p>
+          <LineChart
+            points={horizonSeries.map((v, i) => ({ x: `${i * 15}m`, y: v }))}
+            mode="line"
+            unit=" kg/h"
+            formatTitle={(p) => `+${p.x}: ${p.y} kg/h`}
+          />
+          <p className="note">نمودار بالا: پیش‌بینی ۸ ساعت آینده (هر نقطه ۱۵ دقیقه)، بر پایه سری مرجع سنتتیک — بدون باند اطمینان ساختگی، چون مدل هولت خروجی عدم‌قطعیت نمی‌دهد.</p>
+          <Collapsible>
+            <p className="note">{outlook.data_source}</p>
+            <p className="note">{outlook.method}</p>
+            <p className="note">
+              به تفکیک افق:{" "}
+              {Object.entries(outlook.measured_rmse_pct_by_horizon_h ?? {})
+                .map(([h, v]) => `${h}h: ${v}٪`)
+                .join(" | ")}
+            </p>
+          </Collapsible>
         </>
       ) : (
         <p className="note">{outlook?.note ?? "در حال بارگذاری..."}</p>
@@ -190,10 +217,10 @@ export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => voi
             </tr>
             <tr>
               <td>سناریو ({result.delta_pct! > 0 ? "+" : ""}{result.delta_pct}٪)</td>
-              <td>{result.scenario.predicted_purity_pct}</td>
-              <td>{result.scenario.production_rate_kg_h}</td>
-              <td>{result.scenario.predicted_energy_intensity_gj_per_t}</td>
-              <td>{result.scenario.oos_margin_pct}</td>
+              <td>{result.scenario.predicted_purity_pct} <Delta before={result.baseline.predicted_purity_pct} after={result.scenario.predicted_purity_pct} /></td>
+              <td>{result.scenario.production_rate_kg_h} <Delta before={result.baseline.production_rate_kg_h} after={result.scenario.production_rate_kg_h} /></td>
+              <td>{result.scenario.predicted_energy_intensity_gj_per_t} <Delta before={result.baseline.predicted_energy_intensity_gj_per_t} after={result.scenario.predicted_energy_intensity_gj_per_t} /></td>
+              <td>{result.scenario.oos_margin_pct} <Delta before={result.baseline.oos_margin_pct} after={result.scenario.oos_margin_pct} /></td>
             </tr>
           </tbody>
         </table>
@@ -204,13 +231,22 @@ export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => voi
       {scenarios?.ready ? (
         <>
           <p className="note">{scenarios.weights_note}</p>
+          <BarList
+            items={scenarios.scenarios.map((s) => ({ label: s.name, value: s.score }))}
+            color="#5b8def"
+            formatValue={(v) => v.toFixed(2)}
+          />
           {scenarios.scenarios.map((s) => (
             <div key={s.name} className={`scenario-card ${s.name === scenarios.recommended ? "best" : ""}`}>
-              <b>{s.name}</b>
-              {s.name === scenarios.recommended && <span className="badge badge-ok">بالاترین امتیاز</span>}
-              <div className="note">
-                امتیاز: {s.score} — تولید: {s.production_rate_kg_h} kg/h — خلوص: {s.predicted_purity_pct}٪ — شدت انرژی:{" "}
-                {s.predicted_energy_intensity_gj_per_t} GJ/t
+              <div className="rec-head">
+                <b>{s.name}</b>
+                {s.name === scenarios.recommended && <span className="badge badge-ok">بالاترین امتیاز</span>}
+              </div>
+              <div className="rec-chips">
+                <span className="chip">امتیاز {s.score}</span>
+                <span className="chip">تولید {s.production_rate_kg_h} kg/h</span>
+                <span className="chip">خلوص {s.predicted_purity_pct}٪</span>
+                <span className="chip">شدت انرژی {s.predicted_energy_intensity_gj_per_t} GJ/t</span>
               </div>
             </div>
           ))}
@@ -223,33 +259,17 @@ export default function ForecastDecision({ onAuthLost }: { onAuthLost: () => voi
       <button onClick={autoGenerate}>تولید توصیه از برآورد کیفیت فعلی</button>
       {recs.length === 0 && <p className="note">توصیه‌ای ثبت نشده.</p>}
       {recs.map((r) => (
-        <div key={r.id} className="scenario-card">
-          <b>{r.title}</b>
-          <span className={`badge ${r.effective_status === "accepted" ? "badge-ok" : r.effective_status === "rejected" ? "badge-bad" : "badge-warn"}`}>
-            {r.effective_status === "pending" ? "در انتظار" : r.effective_status === "accepted" ? "پذیرفته‌شده" : "رد‌شده"}
-          </span>
-          <div className="note">{r.detail}</div>
-          {r.suggested_action && (
-            <div className="note">
-              اقدام پیشنهادی: {r.suggested_action.parameter} {r.suggested_action.delta_pct > 0 ? "+" : ""}
-              {r.suggested_action.delta_pct}٪
-            </div>
-          )}
-          {r.expected_effect && (
-            <div className="note">
-              اثر مورد انتظار: {Object.entries(r.expected_effect).map(([k, v]) => `${k}: ${v}`).join(" | ")}
-            </div>
-          )}
-          <div>
-            <button onClick={() => decide(r.id, "accepted")}>تأیید</button>{" "}
-            <button onClick={() => decide(r.id, "rejected")}>رد</button>
-          </div>
-          {r.decisions.length > 0 && (
-            <div className="note">
-              تاریخچه ممیزی ({r.decisions.length} رویداد): {r.decisions.map((d) => `${d.decision}@${d.ts}`).join(" → ")}
-            </div>
-          )}
-        </div>
+        <RecommendationCard
+          key={r.id}
+          title={r.title}
+          detail={r.detail}
+          status={r.effective_status}
+          suggestedAction={r.suggested_action}
+          expectedEffect={r.expected_effect}
+          decisions={r.decisions}
+          onAccept={() => decide(r.id, "accepted")}
+          onReject={() => decide(r.id, "rejected")}
+        />
       ))}
     </div>
   );

@@ -28,6 +28,16 @@ def test_module1_tag_envelope_uses_trained_model_for_modelled_tags(client, token
     assert mek_envelope["basis"] == "model"
 
 
+def test_module1_tag_history(client, tokens):
+    """New minimal endpoint backing the dashboard's trend sparkline —
+    just a short read of the existing historian_samples ticker."""
+    history = client.get("/api/process-intelligence/tags/TI-101/history?limit=10", headers=H(tokens)).json()
+    assert history["tag_id"] == "TI-101"
+    assert len(history["points"]) == 10
+    assert history["points"][0]["ts"] <= history["points"][-1]["ts"]  # oldest first
+    assert client.get("/api/process-intelligence/tags/NOPE/history", headers=H(tokens)).status_code == 404
+
+
 def test_module1_operating_envelopes_and_correlation(client, tokens):
     envelopes = client.get("/api/process-intelligence/operating-envelopes", headers=H(tokens)).json()
     assert envelopes["ready"] is True

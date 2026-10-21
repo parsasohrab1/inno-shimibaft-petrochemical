@@ -1,5 +1,8 @@
 import { useEffect, useState } from "react";
 import { AuthError, api } from "../api";
+import Collapsible from "../components/Collapsible";
+import KpiCard from "../components/KpiCard";
+import LineChart from "../components/LineChart";
 
 type Intensity = {
   items: { product: string; ts: string; gj_per_t: number }[];
@@ -50,7 +53,14 @@ type MixResult = {
 /** Module 2 — FR-M2-01..04 (docs/SRS.md section 3.1.2).
  * Energy baseline (EnB/EnPI/CUSUM) and the LP production-mix optimizer
  * are now real, trained/solved on synthetic data — see
- * backend/app/ml/module2_energy.py. */
+ * backend/app/ml/module2_energy.py.
+ *
+ * Presentation rewritten: headline numbers are KPI tiles (with a real
+ * trend sparkline built from the already-fetched intensity.items
+ * series), the EnB regression formula and deviation-detection method
+ * move into a collapsible detail, and the LP scenarios render as
+ * proper cards with revenue/cost/profit chips instead of a wall of
+ * inline text. */
 export default function EnergyFeedstock({ onAuthLost }: { onAuthLost: () => void }) {
   const [intensity, setIntensity] = useState<Intensity | null>(null);
   const [batches, setBatches] = useState<FeedBatch[]>([]);
@@ -81,51 +91,57 @@ export default function EnergyFeedstock({ onAuthLost }: { onAuthLost: () => void
 
   const dd = intensity?.energy_baseline?.deviation_detection;
   const preview = intensity?.energy_timeseries_preview ?? [];
-  const maxAbsCusum = Math.max(1, ...preview.map((p) => Math.abs(p.cusum_gj)));
+  const intensityTrend = (intensity?.items ?? []).map((i) => i.gj_per_t);
 
   return (
     <div className="card">
       <h2>ماژول ۲ — بهینه‌سازی هوشمند مصرف انرژی و خوراک</h2>
-      <p>
-        میانگین Energy Intensity (نمونه نمایشی): <b>{intensity?.average_gj_per_t ?? "—"} GJ/t</b>
-      </p>
-      {intensity?.note && <p className="note">{intensity.note}</p>}
 
-      <h3>خط پایه انرژی ISO 50001 (EnB) — FR-M2-01/02</h3>
-      {intensity?.energy_baseline?.ready ? (
-        <div className="grid-2">
-          <div>
-            <p className="note">
-              energy_gj = {intensity.energy_baseline.intercept_gj} + {intensity.energy_baseline.slope_gj_per_t} ×
-              production_t (بازه مرجع {intensity.energy_baseline.interval_min} دقیقه)
-            </p>
-            {dd && (
-              <p>
-                نرخ تشخیص انحراف &gt;۵٪:{" "}
-                <b className={dd.meets_target ? "status-green" : "status-red"}>{dd.measured_recall_pct}٪</b>
-                {" "}(هدف ≥ {dd.target_recall_pct}٪، دقت {dd.measured_precision_pct}٪)
-                <span className={`badge ${dd.meets_target ? "badge-ok" : "badge-bad"}`}>
-                  {dd.meets_target ? "برآورده شد" : "برآورده نشد"}
-                </span>
-                <br />
-                <small className="note">{dd.method}</small>
+      <div className="kpi-grid">
+        <KpiCard
+          label="میانگین شدت انرژی (نمونه نمایشی)"
+          value={intensity?.average_gj_per_t ?? "—"}
+          unit="GJ/t"
+          trend={intensityTrend}
+          status="neutral"
+        >
+          {intensity?.note && <p className="note">{intensity.note}</p>}
+        </KpiCard>
+
+        {intensity?.energy_baseline?.ready && dd && (
+          <KpiCard
+            label="نرخ تشخیص انحراف انرژی (EnB، آستانه ۵٪>)"
+            value={dd.measured_recall_pct}
+            unit="٪"
+            status={dd.meets_target ? "good" : "bad"}
+            statusText={dd.meets_target ? "برآورده شد" : "برآورده نشد"}
+            target={`هدف ≥ ${dd.target_recall_pct}٪، دقت ${dd.measured_precision_pct}٪`}
+          >
+            <Collapsible>
+              <p className="note">
+                خط پایه ISO 50001 (EnB): energy_gj = {intensity.energy_baseline.intercept_gj} +{" "}
+                {intensity.energy_baseline.slope_gj_per_t} × production_t (بازه مرجع {intensity.energy_baseline.interval_min} دقیقه)
               </p>
-            )}
-          </div>
-          <div>
-            <p className="note">CUSUM انرژی (پیش‌نمایش سری سنتتیک مرجع):</p>
-            <div className="bars">
-              {preview.map((p, i) => (
-                <div
-                  key={i}
-                  className={`bar ${p.cusum_gj < 0 ? "negative" : ""}`}
-                  style={{ height: `${Math.max(2, (Math.abs(p.cusum_gj) / maxAbsCusum) * 76)}px` }}
-                  title={`${p.ts}: CUSUM=${p.cusum_gj} GJ, EnPI=${p.enpi}`}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
+              <p className="note">{dd.method}</p>
+            </Collapsible>
+          </KpiCard>
+        )}
+      </div>
+
+      {intensity?.energy_baseline?.ready ? (
+        <>
+          <h3>CUSUM انرژی — ISO 50001 (پیش‌نمایش سری سنتتیک مرجع)</h3>
+          <LineChart
+            points={preview.map((p) => ({ x: p.ts.slice(11, 16), y: p.cusum_gj }))}
+            mode="bar"
+            zeroLine
+            unit=" GJ"
+            formatTitle={(p) => `${p.x}: CUSUM=${p.y} GJ`}
+          />
+          <p className="note">
+            CUSUM = مجموع تجمعی (مصرف واقعی − مصرف پیش‌بینی‌شده از خط پایه EnB). میله آبی: مصرف واقعی بیشتر از خط پایه؛ میله قرمز: کمتر از خط پایه (صرفه‌جویی تجمعی).
+          </p>
+        </>
       ) : (
         <p className="note">{intensity?.energy_baseline?.note ?? "در حال بارگذاری..."}</p>
       )}
@@ -164,21 +180,28 @@ export default function EnergyFeedstock({ onAuthLost }: { onAuthLost: () => void
           </p>
           {mix.scenarios.map((s) => (
             <div key={s.name} className={`scenario-card ${s.name === mix.recommended_scenario ? "best" : ""}`}>
-              <b>{s.description}</b>
-              {s.name === mix.recommended_scenario && <span className="badge badge-ok">پیشنهادی (بیشترین سود)</span>}
-              {!s.feasible && <span className="badge badge-bad">غیرممکن</span>}
-              <div className="note">
-                تولید:{" "}
-                {Object.entries(s.production_t).map(([p, v]) => `${p}: ${v.toFixed(1)}t`).join(" | ")}
+              <div className="rec-head">
+                <b>{s.description}</b>
+                <span>
+                  {s.name === mix.recommended_scenario && <span className="badge badge-ok">پیشنهادی (بیشترین سود)</span>}
+                  {!s.feasible && <span className="badge badge-bad">غیرممکن</span>}
+                </span>
+              </div>
+              <div className="rec-chips">
+                <span className="chip">درآمد {s.revenue_usd.toLocaleString()}$</span>
+                <span className="chip">هزینه خوراک {s.feed_cost_usd.toLocaleString()}$</span>
+                <span className="chip">هزینه انرژی {s.energy_cost_usd.toLocaleString()}$</span>
+                <span className="chip chip-action">سود {s.profit_usd.toLocaleString()}$</span>
               </div>
               <div className="note">
-                درآمد {s.revenue_usd.toLocaleString()}$ − هزینه خوراک {s.feed_cost_usd.toLocaleString()}$ − هزینه انرژی{" "}
-                {s.energy_cost_usd.toLocaleString()}$ = سود <b>{s.profit_usd.toLocaleString()}$</b>
+                تولید: {Object.entries(s.production_t).map(([p, v]) => `${p}: ${v.toFixed(1)}t`).join(" | ")}
               </div>
               {s.binding_constraints.length > 0 && (
                 <div className="note">محدودیت فعال: {s.binding_constraints.join("، ")}</div>
               )}
-              <div className="note">{s.assumptions_note}</div>
+              <Collapsible title="جزئیات فرض‌ها">
+                <p className="note">{s.assumptions_note}</p>
+              </Collapsible>
             </div>
           ))}
         </>

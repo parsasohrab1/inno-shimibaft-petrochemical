@@ -111,6 +111,25 @@ def tag_envelope(conn: sqlite3.Connection, tag_id: str) -> dict | None:
     }
 
 
+def tag_history(conn: sqlite3.Connection, tag_id: str, limit: int = 60) -> dict | None:
+    """Recent ``historian_samples`` points for one tag, oldest first — a
+    minimal read of the existing ticker (see db.py) so the dashboard can
+    draw a trend sparkline next to a tag's current value instead of only
+    a single number. No new storage: same seeded/illustrative rows the
+    rest of Module 1 already reads, just returned as a short series.
+    """
+    tag = rows(conn, "SELECT 1 FROM process_tags WHERE tag_id=?", (tag_id,))
+    if not tag:
+        return None
+    pts = rows(
+        conn,
+        "SELECT ts, value FROM historian_samples WHERE tag_id=? ORDER BY ts DESC LIMIT ?",
+        (tag_id, limit),
+    )
+    points = [{"ts": r["ts"], "value": r["value"]} for r in reversed(pts)]
+    return {"tag_id": tag_id, "points": points}
+
+
 def variability_flags(conn: sqlite3.Connection) -> list[dict]:
     """Flag tags whose recent sample standard deviation looks unusually wide
     relative to their declared normal band — a crude stand-in for the

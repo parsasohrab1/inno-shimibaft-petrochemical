@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { AuthError, api } from "../api";
-import RangeBar from "../components/RangeBar";
+import BarList from "../components/BarList";
+import Collapsible from "../components/Collapsible";
+import Gauge from "../components/Gauge";
+import KpiCard from "../components/KpiCard";
+import TrafficLight from "../components/TrafficLight";
 
 type Risk = {
   sample_id: string;
@@ -38,11 +42,22 @@ type ModelPredictions = {
 const SPEC_MIN = 97.0;
 const SPEC_MAX = 100.0;
 
+function riskStatus(risk: number): "red" | "yellow" | "green" {
+  return risk > 0.5 ? "red" : risk > 0.2 ? "yellow" : "green";
+}
+const RISK_LABEL = { red: "ریسک بالا", yellow: "ریسک متوسط", green: "ریسک پایین" } as const;
+
 /** Module 3 — FR-M3-01..03 (docs/SRS.md section 3.1.3).
  * model-predictions is the real GradientBoosting purity regressor + the
  * 30-min-ahead OOS classifier + real feature-importance ranking — see
  * backend/app/ml/module3_quality.py. The offspec-risk table below is the
- * older, separate "latest sample lab result vs spec" view. */
+ * older, separate "latest sample lab result vs spec" view.
+ *
+ * Presentation rewritten: purity/MAE/OOS/TPR become KPI tiles with a
+ * gauge for purity-vs-spec, the feature-importance table becomes a
+ * ranked horizontal bar list, and every lab-sample row now carries the
+ * same exact-value + range + 3-lamp traffic-light treatment as the rest
+ * of the dashboard instead of a bare risk number. */
 export default function QualityPrediction({ onAuthLost }: { onAuthLost: () => void }) {
   const [rows, setRows] = useState<Risk[]>([]);
   const [pred, setPred] = useState<ModelPredictions | null>(null);
@@ -62,92 +77,90 @@ export default function QualityPrediction({ onAuthLost }: { onAuthLost: () => vo
     <div className="card">
       <h2>ماژول ۳ — پیش‌بینی هوشمند کیفیت و شناسایی OOS</h2>
 
-      <h3>پیش‌بینی خلوص MTBE (مدل واقعی) — FR-M3-01</h3>
       {pred?.ready ? (
         <>
           <p className="note">{pred.data_source}</p>
-          <p>
-            خلوص پیش‌بینی‌شده: <b>{pred.predicted_purity_pct}٪</b>
-          </p>
-          <RangeBar value={pred.predicted_purity_pct} lo={SPEC_MIN} hi={SPEC_MAX} marker={SPEC_MIN} />
-          <p className="note">
-            MAE روی مجموعه آزمون: <b className={pred.purity_model?.meets_target ? "status-green" : "status-red"}>
-              {pred.purity_model?.mae_test_pct}٪
-            </b>{" "}
-            (هدف ≤ {pred.purity_model?.target_mae_pct}٪)
-            <span className={`badge ${pred.purity_model?.meets_target ? "badge-ok" : "badge-bad"}`}>
-              {pred.purity_model?.meets_target ? "برآورده شد" : "برآورده نشد"}
-            </span>
-          </p>
+          <div className="kpi-grid">
+            <div className="kpi-card">
+              <div className="kpi-label">خلوص پیش‌بینی‌شده MTBE (مدل واقعی) — FR-M3-01</div>
+              <Gauge
+                value={pred.predicted_purity_pct}
+                lo={SPEC_MIN}
+                hi={SPEC_MAX}
+                unit="٪"
+                status={pred.predicted_purity_pct != null && pred.predicted_purity_pct >= SPEC_MIN ? "green" : "red"}
+                statusLabel={pred.predicted_purity_pct != null && pred.predicted_purity_pct >= SPEC_MIN ? "درون مشخصه" : "خارج از مشخصه"}
+              />
+              <Collapsible>
+                <p className="note">
+                  MAE روی مجموعه آزمون:{" "}
+                  <b className={pred.purity_model?.meets_target ? "status-green" : "status-red"}>
+                    {pred.purity_model?.mae_test_pct}٪
+                  </b>{" "}
+                  (هدف ≤ {pred.purity_model?.target_mae_pct}٪)
+                  <span className={`badge ${pred.purity_model?.meets_target ? "badge-ok" : "badge-bad"}`}>
+                    {pred.purity_model?.meets_target ? "برآورده شد" : "برآورده نشد"}
+                  </span>
+                </p>
+              </Collapsible>
+            </div>
 
-          <h4>احتمال خارج از مشخصه ۳۰ دقیقه آینده — FR-M3-02</h4>
-          <p>
-            احتمال OOS: <b className={pred.oos_30min_flag ? "status-red" : "status-green"}>
-              {((pred.oos_30min_probability ?? 0) * 100).toFixed(1)}٪
-            </b>{" "}
-            {pred.oos_30min_flag ? "— هشدار" : "— عادی"} (آستانه تصمیم {pred.oos_model?.decision_threshold})
-          </p>
-          <p className="note">
-            روی مجموعه آزمون: TPR=
-            <b className={pred.oos_model?.meets_target ? "status-green" : "status-red"}>{(
-              (pred.oos_model?.tpr_test ?? 0) * 100
-            ).toFixed(1)}</b>
-            ٪ (هدف ≥ {(pred.oos_model?.target_tpr ?? 0) * 100}٪), دقت={((pred.oos_model?.precision_test ?? 0) * 100).toFixed(1)}
-            ٪، AUC={pred.oos_model?.auc_test}
-          </p>
-          <p className="warning-text">{pred.oos_model?.caveat}</p>
+            <KpiCard
+              label="احتمال خارج از مشخصه ۳۰ دقیقه آینده — FR-M3-02"
+              value={((pred.oos_30min_probability ?? 0) * 100).toFixed(1)}
+              unit="٪"
+              status={pred.oos_30min_flag ? "bad" : "good"}
+              statusText={pred.oos_30min_flag ? "هشدار" : "عادی"}
+              target={`آستانه تصمیم ${pred.oos_model?.decision_threshold}`}
+            >
+              <Collapsible>
+                <p className="note">
+                  روی مجموعه آزمون: TPR=
+                  <b className={pred.oos_model?.meets_target ? "status-green" : "status-red"}>
+                    {((pred.oos_model?.tpr_test ?? 0) * 100).toFixed(1)}
+                  </b>
+                  ٪ (هدف ≥ {(pred.oos_model?.target_tpr ?? 0) * 100}٪), دقت={((pred.oos_model?.precision_test ?? 0) * 100).toFixed(1)}٪،
+                  AUC={pred.oos_model?.auc_test}
+                </p>
+                <p className="warning-text">{pred.oos_model?.caveat}</p>
+              </Collapsible>
+            </KpiCard>
+          </div>
 
           <h4>عوامل مؤثر رتبه‌بندی‌شده (واقعی) — FR-M3-03</h4>
-          <table>
-            <thead>
-              <tr>
-                <th>عامل</th>
-                <th>سهم اهمیت</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(pred.contributing_factors ?? []).map((f, i) => (
-                <tr key={i}>
-                  <td>{f.tag_label}</td>
-                  <td>{f.importance != null ? `${(f.importance * 100).toFixed(1)}٪` : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <BarList
+            items={(pred.contributing_factors ?? []).map((f) => ({ label: f.tag_label, value: f.importance ?? 0 }))}
+          />
         </>
       ) : (
         <p className="note">{pred?.note ?? "در حال بارگذاری..."}</p>
       )}
 
       <h3>آخرین نمونه‌های آزمایشگاه نسبت به مشخصه (داده نمونه)</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>نمونه</th>
-            <th>محصول</th>
-            <th>پارامتر</th>
-            <th>مقدار</th>
-            <th>مشخصه (min–max)</th>
-            <th>ریسک OOS (۰–۱)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.sample_id}>
-              <td>{r.sample_id}</td>
-              <td>{r.product}</td>
-              <td>{r.parameter}</td>
-              <td>{r.value}</td>
-              <td>
-                {r.spec_min}–{r.spec_max}
-              </td>
-              <td className={r.offspec_risk_0_1 > 0.5 ? "status-red" : r.offspec_risk_0_1 > 0.2 ? "status-yellow" : "status-green"}>
-                {r.offspec_risk_0_1}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <div className="tag-grid">
+        {rows.map((r) => {
+          const st = riskStatus(r.offspec_risk_0_1);
+          return (
+            <div className="tag-card" key={r.sample_id}>
+              <div className="tag-card-head">
+                <span className="tag-card-id">{r.sample_id}</span>
+                <span className="note">{r.product} — {r.parameter}</span>
+              </div>
+              <Gauge
+                value={r.value}
+                lo={r.spec_min}
+                hi={r.spec_max}
+                status={st}
+                statusLabel={RISK_LABEL[st]}
+              />
+              <div className="note" style={{ display: "flex", justifyContent: "space-between" }}>
+                <span>ریسک OOS: {r.offspec_risk_0_1}</span>
+                <TrafficLight status={st} />
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
