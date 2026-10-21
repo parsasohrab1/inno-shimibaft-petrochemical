@@ -10,13 +10,21 @@ real, not fixed-band-heuristic, analysis:
   - FR-M1-03: multivariate correlation of 5 process variables against a
     productivity-proxy KPI, with a measured R^2 — see
     ``backend/app/ml/module1_process.train_productivity_correlation`` and
-    its docstring's honesty caveat about the engineered KPI.
+    its docstring's honesty caveat about the engineered KPI. The MEK
+    unit's analogous correlation is ``mek_productivity_correlation``
+    below.
 
-Only 5 of the 10 seeded tags (TI-101, PI-102, FI-103, FI-301, EI-401) are
-covered by the synthetic generator and therefore have a real envelope;
-the rest (FI-104, AI-105, TI-201, and the MEK placeholders TI-501/TI-502)
-fall back to the old fixed-band heuristic, now explicitly labelled
-``not_modeled`` rather than presented as equivalent.
+As of the shared digital-twin work (``backend/app/ml/digital_twin.py``),
+ALL 10 seeded tags — not just the original 5 — are covered by the shared
+twin core and have a real, data-driven envelope (``basis: "model"``);
+none fall back to the fixed-band heuristic anymore. The MEK tags'
+underlying physics are this repository's own engineering assumptions
+(see digital_twin.py's honesty note on this), so "model" there means "a
+real statistical envelope over an illustrative physical model", not
+"validated against the real MEK unit". ``tag_envelope``'s
+``basis: "not_modeled"`` fallback path is kept as a defensive default for
+any FUTURE tag added without a twin column — it should not currently be
+reachable for any of the 10 seeded tags.
 
 Everything here is trained on synthetic data only — see
 ``backend/app/ml/__init__.py``. Results are measured on a synthetic
@@ -167,8 +175,8 @@ def productivity_correlation() -> dict:
         "ready": True,
         "target": corr.target,
         "target_note": (
-            "FI-301 (دبی محصول MTBE) در مولد سنتتیک مستقیماً وجود ندارد؛ این یک شاخص مهندسی‌شده "
-            "(feed_flow_kg_h × خلوص/۱۰۰) است، نه تگ اندازه‌گیری‌شده — رجوع کنید به Docstring ماژول"
+            "FI-301 (دبی محصول MTBE) اکنون یک کمیت واقعی موازنه جرم (ایزوبوتن واکنش‌داده + متانول واکنش‌داده) "
+            "از دوقلوی دیجیتال مشترک است، نه تگ مستقل اندازه‌گیری‌شده — رجوع کنید به backend/app/ml/digital_twin.py"
         ),
         "features": corr.features,
         "coefficients": corr.coefficients,
@@ -181,4 +189,100 @@ def productivity_correlation() -> dict:
         "meets_target": corr.meets_target,
         "feature_count": len(corr.features),
         "meets_feature_count_target": len(corr.features) >= 5,
+    }
+
+
+def mek_productivity_correlation() -> dict:
+    """FR-M1-03 for the MEK unit — the digital-twin-work extension of the
+    same multivariate correlation analysis, over the MEK unit's own
+    variables (hydration/dehydrogenation temperatures, butene feed,
+    conversion efficiencies) against real MEK production
+    (``mek_production_kg_h``, itself a mass-balance quantity from the
+    two-stage reaction model — see backend/app/ml/digital_twin.py).
+    """
+    if not registry.is_ready():
+        return {"ready": False, "note": "مدل‌ها هنوز آموزش ندیده‌اند"}
+    corr = registry.get_artifacts()["mek_correlation"]
+    return {
+        "ready": True,
+        "target": corr.target,
+        "target_note": (
+            "mek_production_kg_h یک کمیت واقعی موازنه جرم از مدل دومرحله‌ای هیدراتاسیون→دهیدروژناسیون "
+            "دوقلوی دیجیتال است (نه تگ رسمی SRS) — رجوع کنید به backend/app/ml/digital_twin.py؛ "
+            "ضرایب/دماهای بهینه این واحد فرضیات مهندسی همین مخزن‌اند، نه داده تأییدشده کارفرما"
+        ),
+        "features": corr.features,
+        "coefficients": corr.coefficients,
+        "intercept": corr.intercept,
+        "r2_train": corr.r2_train,
+        "r2_test": corr.r2_test,
+        "n_train": corr.n_train,
+        "n_test": corr.n_test,
+        "target_r2": 0.7,
+        "meets_target": corr.meets_target,
+        "feature_count": len(corr.features),
+        "meets_feature_count_target": len(corr.features) >= 5,
+    }
+
+
+# --- Process-overview (digital-twin work, item 5): MTBE -> Raffinate-2
+# split -> MEK, with a worst-of-tags traffic-light status per node -------
+
+_UNIT_TAGS = {
+    "MTBE": ["TI-101", "PI-102", "FI-103", "FI-104", "AI-105", "TI-201", "FI-301", "EI-401"],
+    "MEK": ["TI-501", "TI-502"],
+}
+_STATUS_RANK = {"green": 0, "yellow": 1, "red": 2, "unknown": 1}
+
+
+def _worst_status(statuses: list[str]) -> str:
+    if not statuses:
+        return "unknown"
+    return max(statuses, key=lambda s: _STATUS_RANK.get(s, 1))
+
+
+def process_overview(conn: sqlite3.Connection) -> dict:
+    """A simple MTBE -> Raffinate-2 -> MEK flow overview for the
+    frontend's process-overview diagram: one worst-of-tags traffic-light
+    status per node (never colour alone — a text label always
+    accompanies it, per this account's dashboard convention).
+
+    Raffinate-2 has no dedicated instrument tag of its own (it is the
+    MTBE reactor's mass-balance by-product — see digital_twin.py), so its
+    node status is honestly reported as following the MTBE unit's own
+    status rather than inventing a separate reading for it.
+    """
+    nodes = []
+    for unit in ("MTBE", "MEK"):
+        statuses = []
+        for tag_id in _UNIT_TAGS[unit]:
+            env = tag_envelope(conn, tag_id)
+            if env:
+                statuses.append(env["status"])
+        worst = _worst_status(statuses)
+        nodes.append({
+            "id": unit,
+            "label": "واحد MTBE" if unit == "MTBE" else "واحد MEK",
+            "status": worst,
+            "status_label": {
+                "green": "عملکرد نرمال", "yellow": "نزدیک به مرز محدوده", "red": "خارج از محدوده مجاز", "unknown": "بدون داده",
+            }[worst],
+            "tag_ids": _UNIT_TAGS[unit],
+        })
+    mtbe_status = nodes[0]["status"]
+    nodes.insert(1, {
+        "id": "RAFFINATE2",
+        "label": "رافینیت ۲ (محصول جانبی)",
+        "status": mtbe_status,
+        "status_label": "وضعیت از واحد MTBE گرفته شده — سنسور مستقل برای رافینیت ۲ مدل‌سازی نشده",
+        "tag_ids": [],
+        "derived_from": "MTBE",
+    })
+    return {
+        "nodes": nodes,
+        "flow": ["MTBE", "RAFFINATE2", "MEK"],
+        "note": (
+            "نمای کلی ساده‌شده جریان فرآیند — وضعیت هر گره بدترین وضعیت تگ‌های آن واحد از دوقلوی دیجیتال مشترک است؛ "
+            "نه یک شبیه‌سازی توپولوژی واقعی خط لوله"
+        ),
     }

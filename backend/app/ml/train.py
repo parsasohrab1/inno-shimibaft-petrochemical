@@ -62,6 +62,7 @@ def train_all(
 
     envelopes = m1.compute_operating_envelopes(df)
     correlation = m1.train_productivity_correlation(df)
+    mek_correlation = m1.train_mek_productivity_correlation(df)
 
     energy_baseline = m2.train_energy_baseline(df, interval_min=1.0)
     energy_mae_sanity = m2.regression_sanity_mae(energy_baseline, df)
@@ -93,6 +94,7 @@ def train_all(
     artifacts = {
         "envelopes": envelopes,
         "correlation": correlation,
+        "mek_correlation": mek_correlation,
         "energy_baseline": energy_baseline,
         "purity_regressor": purity_regressor,
         "oos_classifier": oos_classifier,
@@ -115,6 +117,7 @@ def train_all(
         "module1": {
             "envelopes": {tag: _jsonable(env) for tag, env in envelopes.items()},
             "productivity_correlation": _jsonable(correlation),
+            "mek_productivity_correlation": _jsonable(mek_correlation),
         },
         "module2": {
             "energy_baseline": _jsonable(energy_baseline),

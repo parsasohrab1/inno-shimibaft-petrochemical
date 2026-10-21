@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { AuthError, api } from "../api";
+import ProcessOverview from "../components/ProcessOverview";
 import RangeBar from "../components/RangeBar";
 
 type Tag = {
@@ -36,14 +37,18 @@ type Correlation = {
 };
 
 /** Module 1 — FR-M1-01..03 (docs/SRS.md section 3.1.1).
- * FR-M1-02/03 now show real trained-model output (operating envelope +
- * 95% CI, multivariate R^2) for the tags backend/app/ml/synthetic.py
- * models; everything else is still the old fixed-band heuristic,
- * labelled "basis: not_modeled". Measured on synthetic data only. */
+ * FR-M1-02/03 show real trained-model output (operating envelope + 95%
+ * CI, multivariate R^2). As of the shared digital-twin work
+ * (backend/app/ml/digital_twin.py), ALL 10 tags — MTBE unit and MEK unit
+ * — are covered ("basis: model"); the "not_modeled" fallback below is
+ * only a defensive default for any future tag added without a twin
+ * column. Measured on synthetic data only. */
 export default function ProcessIntelligence({ onAuthLost }: { onAuthLost: () => void }) {
   const [tags, setTags] = useState<Tag[]>([]);
   const [envelopes, setEnvelopes] = useState<Record<string, Envelope>>({});
   const [correlation, setCorrelation] = useState<Correlation | null>(null);
+  const [mekCorrelation, setMekCorrelation] = useState<Correlation | null>(null);
+  const [overview, setOverview] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -58,6 +63,8 @@ export default function ProcessIntelligence({ onAuthLost }: { onAuthLost: () => 
         results.forEach((r) => (byId[r.tag_id] = r));
         setEnvelopes(byId);
         setCorrelation(await api<Correlation>("/api/process-intelligence/productivity-correlation"));
+        setMekCorrelation(await api<Correlation>("/api/process-intelligence/mek-productivity-correlation"));
+        setOverview(await api<any>("/api/process-intelligence/process-overview"));
       } catch (e) {
         if (e instanceof AuthError) onAuthLost();
         else setError(String(e));
@@ -66,6 +73,8 @@ export default function ProcessIntelligence({ onAuthLost }: { onAuthLost: () => 
   }, []);
 
   return (
+    <>
+    <ProcessOverview overview={overview} />
     <div className="card">
       <h2>ماژول ۱ — هوش فرآیند و بهینه‌سازی شرایط عملیاتی</h2>
       {error && <p style={{ color: "#c0392b" }}>{error}</p>}
@@ -114,7 +123,7 @@ export default function ProcessIntelligence({ onAuthLost }: { onAuthLost: () => 
         </tbody>
       </table>
       <p className="note">
-        «مدل»: محدوده و CI ۹۵٪ از مدل آموزش‌دیده روی داده سنتتیک. «مدل‌سازی‌نشده»: مقایسه با محدوده ثابت seed‌شده (جای‌نگه‌دار).
+        «مدل»: محدوده و CI ۹۵٪ از مدل آموزش‌دیده روی دوقلوی دیجیتال سنتتیک مشترک (برای همه ۱۰ تگ). «مدل‌سازی‌نشده»: حالت پیش‌فرض محافظه‌کارانه برای تگ‌های آینده‌ای که هنوز ستونی در دوقلوی دیجیتال ندارند.
       </p>
 
       <h3>همبستگی چندمتغیره با شاخص بهره‌وری (FR-M1-03)</h3>
@@ -131,6 +140,22 @@ export default function ProcessIntelligence({ onAuthLost }: { onAuthLost: () => 
       ) : (
         <p className="note">مدل‌ها هنوز آموزش ندیده‌اند.</p>
       )}
+
+      <h3>همبستگی چندمتغیره واحد MEK با تولید واقعی (FR-M1-03، افزوده دوقلوی دیجیتال)</h3>
+      {mekCorrelation?.ready ? (
+        <>
+          <p>
+            هدف: <code>{mekCorrelation.target}</code> — R²<sub>test</sub> ={" "}
+            <b className={mekCorrelation.meets_target ? "status-green" : "status-red"}>{mekCorrelation.r2_test}</b>
+            {" "}(هدف ≥ {mekCorrelation.target_r2}, آموزش n={mekCorrelation.n_train}, آزمون n={mekCorrelation.n_test})
+          </p>
+          <p className="note">{mekCorrelation.target_note}</p>
+          <p className="note">متغیرها ({mekCorrelation.features?.length}): {mekCorrelation.features?.join("، ")}</p>
+        </>
+      ) : (
+        <p className="note">مدل‌ها هنوز آموزش ندیده‌اند.</p>
+      )}
     </div>
+    </>
   );
 }

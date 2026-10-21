@@ -16,8 +16,21 @@ only be used for scaffolding/UI development and for pre-training models
 that will later be fine-tuned on real Shimi Baft data (per docs/SRS.md
 section 3.2.3).
 
-There is no equivalent official generator for the MEK unit in the SRS —
-extending this module to MEK is listed as a TODO in backend/app/seed.py.
+There is now an equivalent shared physics core for the MEK unit and for
+the rest of the MTBE unit's previously-unmodeled tags (FI-104, AI-105,
+TI-201) and for Raffinate-2 as a real mass-balance co-product — see
+``backend/app/ml/digital_twin.py``. That module deliberately does NOT
+touch this file's formulas; it calls ``_mtbe_core`` below (the SAME
+numbers this file has always produced) and only ADDS the extra physics on
+top, so the line-by-line-reviewed SRS function stays untouched.
+
+NON-FUNCTIONAL REFACTOR (2026-10, digital-twin work): the body of
+``generate_mtbe_synthetic_data`` below was extracted into ``_mtbe_core``
+(same arrays in, same arrays out) purely so ``digital_twin.py`` can reuse
+it for the live-stepping twin without duplicating the formulas. This is
+pure code motion — ``test_generator_default_call_unchanged_by_upset_extension``
+in backend/tests/test_ml_training.py checks the public function's output
+is still bit-for-bit identical.
 
 Usage:
     python scripts/generate_synthetic_data.py --n-points 5000 --out data/mtbe_synthetic.csv
@@ -31,40 +44,33 @@ import numpy as np
 import pandas as pd
 
 
-def generate_mtbe_synthetic_data(
-    n_points: int = 10_000,
-    freq_min: int = 1,
-    seed: int = 42,
+def _mtbe_core(
+    t: np.ndarray,
+    rng: np.random.Generator,
     upset_rate: float = 0.0,
     upset_scale: float = 1.0,
-) -> pd.DataFrame:
-    """Generate synthetic data for the MTBE unit, preserving basic physical relations.
+) -> dict[str, np.ndarray]:
+    """The SRS-sourced MTBE physics, as pure arrays-in/arrays-out.
+
+    Extracted verbatim (no formula changed) from what used to be the body
+    of ``generate_mtbe_synthetic_data`` below, so ``backend/app/ml/
+    digital_twin.py`` can call the EXACT same formulas for a single
+    time-step (``t`` of length 1) as this file uses for a bulk ``n_points``
+    array — one physics core, two callers, per the module docstring.
 
     Args:
-        n_points: number of time points to generate.
-        freq_min: spacing between points, in minutes.
-        seed: random seed, for reproducibility.
-        upset_rate: EXTENSION beyond the original SRS function (default 0.0
-            reproduces the original output exactly, bit-for-bit). When > 0,
-            occasional temporary "upset" windows are added to reactor
-            temperature and the methanol:isobutylene ratio — e.g. a
-            setpoint excursion or a feed-quality hiccup — using the SAME
-            downstream purity/energy formulas below. This exists only so
-            backend/app/ml/ has enough genuine out-of-spec examples to
-            train/evaluate the module-3 OOS classifier on (see
-            backend/app/ml/synthetic.py); it does not change the physics
-            formula itself, only how far the inputs occasionally wander.
-        upset_scale: amplitude multiplier for upset windows (only matters
-            when upset_rate > 0).
+        t: the SRS generator's dimensionless time axis (``np.linspace(0,
+            10, n_points)`` for bulk use; any 1-D array for stepping use).
+        rng: caller-owned RNG (so a stepping caller can keep its own
+            persistent stream across calls instead of reseeding each time).
+        upset_rate, upset_scale: see generate_mtbe_synthetic_data.
 
     Returns:
-        A DataFrame with columns: timestamp, reactor_temp_C, reactor_pressure_MPa,
-        feed_flow_kg_h, meoh_isobutene_ratio, mtbe_purity_pct, energy_intensity_GJ_t.
+        dict of arrays, same length as ``t``: reactor_temp_C,
+        reactor_pressure_MPa, feed_flow_kg_h, meoh_isobutene_ratio,
+        mtbe_purity_pct, energy_intensity_GJ_t.
     """
-    rng = np.random.default_rng(seed)
-    time_index = [datetime(2025, 1, 1) + timedelta(minutes=i * freq_min) for i in range(n_points)]
-
-    t = np.linspace(0, 10, n_points)
+    n_points = len(t)
 
     # Reactor temperature (74-77 C operating band per SRS tag TI-101, with controlled oscillation)
     reactor_temp = 75.5 + 1.2 * np.sin(0.1 * t) + rng.normal(0, 0.3, n_points)
@@ -117,15 +123,53 @@ def generate_mtbe_synthetic_data(
         + rng.normal(0, 0.1, n_points)
     )
 
-    return pd.DataFrame({
-        "timestamp": time_index,
+    return {
         "reactor_temp_C": reactor_temp,
         "reactor_pressure_MPa": pressure,
         "feed_flow_kg_h": feed_flow,
         "meoh_isobutene_ratio": meoh_ratio,
         "mtbe_purity_pct": purity,
         "energy_intensity_GJ_t": energy_intensity,
-    })
+    }
+
+
+def generate_mtbe_synthetic_data(
+    n_points: int = 10_000,
+    freq_min: int = 1,
+    seed: int = 42,
+    upset_rate: float = 0.0,
+    upset_scale: float = 1.0,
+) -> pd.DataFrame:
+    """Generate synthetic data for the MTBE unit, preserving basic physical relations.
+
+    Args:
+        n_points: number of time points to generate.
+        freq_min: spacing between points, in minutes.
+        seed: random seed, for reproducibility.
+        upset_rate: EXTENSION beyond the original SRS function (default 0.0
+            reproduces the original output exactly, bit-for-bit). When > 0,
+            occasional temporary "upset" windows are added to reactor
+            temperature and the methanol:isobutylene ratio — e.g. a
+            setpoint excursion or a feed-quality hiccup — using the SAME
+            downstream purity/energy formulas below. This exists only so
+            backend/app/ml/ has enough genuine out-of-spec examples to
+            train/evaluate the module-3 OOS classifier on (see
+            backend/app/ml/synthetic.py); it does not change the physics
+            formula itself, only how far the inputs occasionally wander.
+        upset_scale: amplitude multiplier for upset windows (only matters
+            when upset_rate > 0).
+
+    Returns:
+        A DataFrame with columns: timestamp, reactor_temp_C, reactor_pressure_MPa,
+        feed_flow_kg_h, meoh_isobutene_ratio, mtbe_purity_pct, energy_intensity_GJ_t.
+    """
+    rng = np.random.default_rng(seed)
+    time_index = [datetime(2025, 1, 1) + timedelta(minutes=i * freq_min) for i in range(n_points)]
+    t = np.linspace(0, 10, n_points)
+
+    core = _mtbe_core(t, rng, upset_rate=upset_rate, upset_scale=upset_scale)
+
+    return pd.DataFrame({"timestamp": time_index, **core})
 
 
 def main() -> None:

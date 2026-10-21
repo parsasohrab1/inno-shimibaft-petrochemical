@@ -14,17 +14,18 @@ def test_module1_process_intelligence(client, tokens):
 
 
 def test_module1_tag_envelope_uses_trained_model_for_modelled_tags(client, tokens):
-    """TI-101 is one of the 5 tags backend/app/ml/synthetic.py models — its
-    envelope should come from the trained model (basis='model'), not the
-    fixed seeded band."""
+    """TI-101 is one of the original 5 tags — its envelope should come
+    from the trained model (basis='model'), not the fixed seeded band."""
     envelope = client.get("/api/process-intelligence/tags/TI-101/envelope", headers=H(tokens)).json()
     assert envelope["basis"] == "model"
     assert "ci95_of_mean" in envelope
     assert "operating_band_p2_5_97_5" in envelope
 
-    # TI-501 is a MEK placeholder tag the generator never modelled
-    not_modeled = client.get("/api/process-intelligence/tags/TI-501/envelope", headers=H(tokens)).json()
-    assert not_modeled["basis"] == "not_modeled"
+    # TI-501 (MEK hydration temperature) is now ALSO covered by the shared
+    # digital-twin core (backend/app/ml/digital_twin.py) — no tag should
+    # fall back to "not_modeled" anymore (see docs/SRS.md section 9).
+    mek_envelope = client.get("/api/process-intelligence/tags/TI-501/envelope", headers=H(tokens)).json()
+    assert mek_envelope["basis"] == "model"
 
 
 def test_module1_operating_envelopes_and_correlation(client, tokens):
@@ -38,6 +39,24 @@ def test_module1_operating_envelopes_and_correlation(client, tokens):
     assert len(corr["features"]) >= 5  # FR-M1-03's >= 5 variables
     assert "r2_test" in corr
     assert 0.0 <= corr["r2_test"] <= 1.0
+
+
+def test_module1_mek_correlation_and_process_overview(client, tokens):
+    """Digital-twin work: FR-M1-03 extended to the MEK unit, plus the
+    MTBE -> Raffinate-2 -> MEK process-overview endpoint."""
+    corr = client.get("/api/process-intelligence/mek-productivity-correlation", headers=H(tokens)).json()
+    assert corr["ready"] is True
+    assert len(corr["features"]) >= 5
+    assert corr["target"] == "mek_production_kg_h"
+    assert 0.0 <= corr["r2_test"] <= 1.0
+
+    overview = client.get("/api/process-intelligence/process-overview", headers=H(tokens)).json()
+    assert overview["flow"] == ["MTBE", "RAFFINATE2", "MEK"]
+    ids = {n["id"] for n in overview["nodes"]}
+    assert ids == {"MTBE", "RAFFINATE2", "MEK"}
+    for node in overview["nodes"]:
+        assert node["status"] in ("red", "yellow", "green", "unknown")
+        assert node["status_label"]  # never colour alone
 
 
 def test_module2_energy_feedstock(client, tokens):

@@ -14,14 +14,22 @@ Honesty notes baked into the feature design (read before changing it):
     value from real-time tags) and for the forward-looking OOS
     classifier. Using current purity as a classifier feature would leak
     the very quantity the real system does not have in real time.
-  - ``product_flow_kg_h`` and ``production_t`` are ENGINEERED PROXIES for
-    the FI-301 product-flow tag, which the synthetic generator does not
-    emit directly. They are modelled as
-    ``feed_flow_kg_h * (mtbe_purity_pct / 100)`` — i.e. a simple
-    yield-adjusted mass balance (more feed and higher purity => more
-    on-spec product). This is a real, physically-motivated engineering
-    relationship (not a tautology to inflate R^2): module 1's correlation
-    analysis in module1_process.py reports this plainly in its docstring.
+  - ``product_flow_kg_h`` (FI-301) and ``production_t`` USED TO BE an
+    engineered proxy (``feed_flow_kg_h * mtbe_purity_pct / 100``). As of
+    the digital-twin work, ``product_flow_kg_h`` is now a REAL mass-
+    balance co-product computed by ``backend/app/ml/digital_twin.py``
+    (isobutene reacted + methanol reacted, from real stoichiometry), and
+    Raffinate-2 (``raffinate2_kg_h``) is the unreacted remainder of the
+    same mass balance — see that module's docstring for the full
+    derivation and its honesty notes. ``feed_flow_kg_h`` is still one of
+    the correlation regressors AND a direct input to this mass balance,
+    so module 1's measured R^2 against this target is still somewhat
+    inflated relative to an independently-measured FI-301 tag — that
+    caveat (now about a real mass balance rather than a bolted-on proxy)
+    is still reported plainly in module1_process.py's docstring.
+  - Every other previously-"not_modeled" tag (FI-104, AI-105, TI-201, and
+    the MEK unit's TI-501/TI-502) is now also derived from the same
+    shared twin core — see ``digital_twin.py``.
 """
 from __future__ import annotations
 
@@ -37,7 +45,9 @@ _GENERATOR_PATH = _REPO_ROOT / "scripts" / "generate_synthetic_data.py"
 
 
 def _load_official_generator():
-    """Import generate_mtbe_synthetic_data straight from its source file.
+    """Import generate_mtbe_synthetic_data (and its extracted _mtbe_core
+    helper — see that file's module docstring) straight from its source
+    file.
 
     Avoids depending on ``scripts`` being an importable package (it has no
     __init__.py) or on the caller's sys.path/cwd.
@@ -47,10 +57,10 @@ def _load_official_generator():
     module = importlib.util.module_from_spec(spec)
     sys.modules.setdefault("_spro_synth_gen", module)
     spec.loader.exec_module(module)
-    return module.generate_mtbe_synthetic_data
+    return module.generate_mtbe_synthetic_data, module._mtbe_core
 
 
-generate_mtbe_synthetic_data = _load_official_generator()
+generate_mtbe_synthetic_data, _mtbe_core = _load_official_generator()
 
 # Reactor pressure is not part of the purity/energy formula at all (see the
 # generator docstring) — it is still offered as a feature/regressor because
@@ -65,14 +75,24 @@ PROCESS_FEATURE_COLUMNS = [
 ]
 
 MTBE_PURITY_SPEC_MIN = 97.0  # matches backend/app/seed.py lab_specs for ("MTBE", "purity_pct")
+MEK_PURITY_SPEC_MIN = 99.0  # matches backend/app/seed.py lab_specs for ("MEK", "purity_pct")
 
-# docs/SRS.md 3.2.2 tag mapping for the columns this package actually models
+# docs/SRS.md 3.2.2 tag mapping, now covering ALL seeded tags (MTBE unit +
+# MEK unit) via the shared digital-twin core (backend/app/ml/digital_twin.py),
+# not just the original 5. See that module's docstring for what is real
+# SRS-sourced physics (TI-101/PI-102/FI-103/the purity+energy formulas)
+# versus this repository's own extension (everything else below).
 TAG_TO_SYNTHETIC_COLUMN = {
     "TI-101": "reactor_temp_C",
     "PI-102": "reactor_pressure_MPa",
     "FI-103": "feed_flow_kg_h",
-    "FI-301": "product_flow_kg_h",  # engineered proxy — see module docstring
+    "FI-104": "methanol_feed_kg_h",
+    "AI-105": "isobutene_feed_pct",
+    "TI-201": "distillation_temp_C",
+    "FI-301": "product_flow_kg_h",  # real mass-balance co-product — see digital_twin.py
     "EI-401": "energy_intensity_GJ_t",
+    "TI-501": "hydration_temp_C",
+    "TI-502": "dehydrogenation_temp_C",
 }
 
 
@@ -83,23 +103,41 @@ def generate_training_frame(
     upset_rate: float = 0.015,
     upset_scale: float = 3.0,
 ) -> pd.DataFrame:
-    """The base MTBE time series plus engineered productivity/rolling columns.
+    """The full multi-unit twin time series plus engineered
+    productivity/rolling columns.
 
-    ``upset_rate``/``upset_scale`` are forwarded to the (otherwise
-    untouched) official generator — see its docstring. Defaults here are
-    tuned (empirically, on this synthetic generator only) to produce a
+    ``upset_rate``/``upset_scale`` are forwarded to the MTBE core (via
+    ``digital_twin.generate_twin_frame`` -> the otherwise untouched
+    official generator) — see its docstring. Defaults here are tuned
+    (empirically, on this synthetic generator only) to produce a
     workable, non-degenerate rate of >minutes-ahead out-of-spec events for
     module 3's classifier (roughly 1-2% of rows), while leaving the
     default call (``upset_rate=0``) bit-for-bit identical to the original
-    SRS-sourced function.
+    SRS-sourced function for the MTBE-core columns.
     """
-    df = generate_mtbe_synthetic_data(
+    from .digital_twin import generate_twin_frame
+
+    df = generate_twin_frame(
         n_points=n_points, freq_min=freq_min, seed=seed, upset_rate=upset_rate, upset_scale=upset_scale
     )
-    df["product_flow_kg_h"] = df["feed_flow_kg_h"] * (df["mtbe_purity_pct"] / 100.0)
+    time_index = [
+        pd.Timestamp("2025-01-01") + pd.Timedelta(minutes=i * freq_min) for i in range(len(df))
+    ]
+    df.insert(0, "timestamp", time_index)
+
+    # FI-301 / product_flow_kg_h is now digital_twin.py's real mass-balance
+    # value (mtbe_mass_balance_kg_h) — see that module and this file's
+    # module docstring for why this replaced the old engineered proxy.
+    df["product_flow_kg_h"] = df["mtbe_mass_balance_kg_h"]
     # tons produced in this sample's interval, for module-2's energy baseline
     df["production_t"] = df["product_flow_kg_h"] * (freq_min / 60.0) / 1000.0
     df["energy_gj"] = df["energy_intensity_GJ_t"] * df["production_t"]
+
+    # Raffinate-2 and MEK analogues of the same per-interval aggregates,
+    # for any future module-2-style energy baseline work on those streams.
+    df["raffinate2_production_t"] = df["raffinate2_kg_h"] * (freq_min / 60.0) / 1000.0
+    df["mek_production_t"] = df["mek_production_kg_h"] * (freq_min / 60.0) / 1000.0
+    df["mek_energy_gj"] = df["mek_energy_intensity_GJ_t"] * df["mek_production_t"]
 
     # rolling, DCS-available-only features (no future leakage: center=False)
     win = max(5, int(round(10 / max(freq_min, 1))))  # ~10 minutes of points

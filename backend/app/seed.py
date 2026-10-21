@@ -1,30 +1,29 @@
 """Seed a small amount of clearly-labelled sample data.
 
-Mostly still NOT a physics-informed simulator (unlike the Khorasan
-Petrochemical SEM project on this account) — most rows are illustrative,
-randomly generated data for the API and frontend to have something to
-show while real DCS/Historian/LIMS integration (see
-``services/dcs_ingest.py``) does not exist yet. Every row is tagged
-``is_sample = 1``.
-
-EXCEPTION: the 5 tags backend/app/ml/synthetic.py trains real operating
-envelopes for (TI-101, PI-102, FI-103, FI-301, EI-401) now get their demo
-``historian_samples`` ticker from the SAME physics-informed generator
-(``generate_mtbe_synthetic_data``) those envelopes are trained on, rather
-than an independent uniform-random band. This was a real bug caught while
-testing: the old uniform-random ticker routinely fell outside the
-generator's much narrower physical range, making the UI show "out of
-range" on tags that were not actually deviating — just inconsistent
-between two unrelated synthetic sources.
+Historian ticker: as of the shared digital-twin work
+(``backend/app/ml/digital_twin.py``), ALL 10 seeded process tags' demo
+``historian_samples`` ticker now come from ONE evolving
+``DigitalTwinState`` — stepped once per historian timestamp, so every
+tag's value at a given row is read from the SAME internally-consistent
+plant-state snapshot, not independently re-randomized per tag. This
+replaced an earlier split where only 5 tags (TI-101, PI-102, FI-103,
+FI-301, EI-401) came from the physics-informed generator and the other 5
+(FI-104, AI-105, TI-201, TI-501, TI-502) were independent
+``random.uniform()`` draws — a real bug caught while testing: the
+uniform-random ticker routinely disagreed with the physically-coupled
+tags (e.g. a feed-flow value that implied a methanol:isobutylene ratio
+nothing like the independently-drawn "ratio" the model was actually
+trained on). Every row is still tagged ``is_sample = 1``.
 
 The first eight tags (TI-101 ... EI-401) and their normal ranges are taken
 verbatim from docs/SRS.md section 3.2.2 (the SRS pushed to this product's
 GitHub repo on 1405/06/16, commit f6d8b6d) — these are the client-approved
 sample MTBE-unit tag list, not something this scaffold invented. The
-remaining MEK-unit tags are this scaffold's own illustrative placeholders
-(the SRS appendix only gives a sample tag list for the MTBE unit), clearly
-marked as such below, since Phase 1 also covers the MEK unit but no
-official MEK tag list has been provided yet.
+remaining MEK-unit tags (TI-501/TI-502) are still this repository's own
+placeholders in the sense that no official SRS tag list exists for the
+MEK unit — but they are now backed by a real two-stage reaction model
+(hydration -> dehydrogenation, see digital_twin.py), not a bare
+uniform-random band.
 """
 from __future__ import annotations
 
@@ -33,7 +32,8 @@ from datetime import datetime, timedelta, timezone
 
 from . import config
 from .db import connect, init_db, one
-from .ml.synthetic import TAG_TO_SYNTHETIC_COLUMN, generate_mtbe_synthetic_data
+from .ml.digital_twin import DigitalTwinState
+from .ml.synthetic import TAG_TO_SYNTHETIC_COLUMN
 from .security import hash_password
 
 SEED = 42
@@ -50,9 +50,10 @@ TAGS = [
     ("TI-201", "MTBE", "دمای برج تقطیر جداسازی MTBE", "°C", 60, 110),
     ("FI-301", "MTBE", "دبی محصول MTBE", "kg/h", 2500, 9500),
     ("EI-401", "MTBE", "مصرف انرژی (بخار/برق) واحد MTBE", "GJ/t", 6.5, 10.5),
-    # --- واحد MEK — جای‌نگه‌دار این اسکلت (در پیوست SRS فهرست تگ رسمی ندارد) ---
-    ("TI-501", "MEK", "دمای واحد هیدراتاسیون بوتن به سک-بوتانول (جای‌نگه‌دار)", "°C", 60, 90),
-    ("TI-502", "MEK", "دمای دهیدروژناسیون سک-بوتانول به MEK (جای‌نگه‌دار)", "°C", 350, 420),
+    # --- واحد MEK — بدون فهرست تگ رسمی در پیوست SRS؛ اکنون پشتیبانی‌شده
+    # توسط یک مدل دومرحله‌ای هیدراتاسیون→دهیدروژناسیون (digital_twin.py) ---
+    ("TI-501", "MEK", "دمای واحد هیدراتاسیون بوتن به سک-بوتانول", "°C", 60, 90),
+    ("TI-502", "MEK", "دمای دهیدروژناسیون سک-بوتانول به MEK", "°C", 350, 420),
 ]
 
 
@@ -80,24 +81,16 @@ def seed() -> None:
                 (username, full_name, role, pw),
             )
 
-        # For the 5 tags backend/app/ml/synthetic.py models (TI-101, PI-102,
-        # FI-103, FI-301, EI-401), the illustrative "live" ticker is sampled
-        # from the SAME physics-informed generator those tags' trained
-        # operating envelopes come from — not an independent uniform random
-        # band. Mixing the two (as this scaffold originally did) made the
-        # demo ticker disagree with the trained model's own range on almost
-        # every page load (e.g. FI-103 showing "out of range" just because
-        # the random ticker and the generator's narrow physical range don't
-        # overlap), which is a real but misleading inconsistency, not an
-        # actual process deviation.
-        synth = generate_mtbe_synthetic_data(n_points=60, freq_min=15, seed=SEED)
-        synth_columns = {
-            "TI-101": synth["reactor_temp_C"],
-            "PI-102": synth["reactor_pressure_MPa"],
-            "FI-103": synth["feed_flow_kg_h"],
-            "FI-301": synth["feed_flow_kg_h"] * (synth["mtbe_purity_pct"] / 100.0),  # product_flow_kg_h proxy
-            "EI-401": synth["energy_intensity_GJ_t"],
-        }
+        # ALL 10 tags' illustrative "live" ticker now come from ONE stepped
+        # DigitalTwinState (backend/app/ml/digital_twin.py) — each of the 60
+        # historian timestamps below is ONE snapshot of the whole plant, so
+        # every tag's value at that timestamp is mutually consistent (e.g.
+        # FI-104's methanol flow at row i is actually derived from FI-103
+        # and the reactor state at that SAME row i), not drawn from two
+        # unrelated random sources the way the old uniform-random fallback
+        # for FI-104/AI-105/TI-201/TI-501/TI-502 was.
+        twin = DigitalTwinState(seed=SEED)
+        snapshots = [twin.step() for _ in range(60)]
 
         for tag_id, unit, desc, uom, lo, hi in TAGS:
             conn.execute(
@@ -105,23 +98,21 @@ def seed() -> None:
                 "VALUES (?,?,?,?,?,?, 'synthetic')",
                 (tag_id, unit, desc, uom, lo, hi),
             )
-            # a short illustrative history per tag
-            if tag_id in TAG_TO_SYNTHETIC_COLUMN:
-                series = synth_columns[tag_id]
-                for i in range(60):
-                    conn.execute(
-                        "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
-                        (tag_id, _now_minus((60 - i) * 15), round(float(series.iloc[i]), 3)),
-                    )
-            else:
-                for i in range(60):
+            column = TAG_TO_SYNTHETIC_COLUMN.get(tag_id)
+            for i in range(60):
+                if column is not None:
+                    value = snapshots[i][column]
+                else:
+                    # Defensive fallback only — unreachable for the 10 tags
+                    # above, kept in case a future tag is added without a
+                    # twin column (see docs/SRS.md section 9 honesty note).
                     mid = (lo + hi) / 2
                     span = (hi - lo) / 2
                     value = mid + random.uniform(-span, span) * 0.6
-                    conn.execute(
-                        "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
-                        (tag_id, _now_minus((60 - i) * 15), round(value, 3)),
-                    )
+                conn.execute(
+                    "INSERT INTO historian_samples(tag_id, ts, value, is_sample) VALUES (?,?,?,1)",
+                    (tag_id, _now_minus((60 - i) * 15), round(float(value), 3)),
+                )
 
         feed_types = [
             ("C4 Raffinate-1 (mixed C4)", "ایزوبوتیلن ~45%، نرمال‌بوتان و بوتن‌های دیگر"),

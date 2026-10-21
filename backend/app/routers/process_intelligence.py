@@ -38,3 +38,15 @@ def operating_envelopes(_=Depends(current_user)):
 def productivity_correlation(_=Depends(current_user)):
     """FR-M1-03 — measured multivariate R^2 against the productivity proxy."""
     return svc.productivity_correlation()
+
+
+@router.get("/mek-productivity-correlation")
+def mek_productivity_correlation(_=Depends(current_user)):
+    """FR-M1-03 for the MEK unit — digital-twin-work extension."""
+    return svc.mek_productivity_correlation()
+
+
+@router.get("/process-overview")
+def process_overview(conn: sqlite3.Connection = Depends(get_conn), _=Depends(current_user)):
+    """MTBE -> Raffinate-2 -> MEK flow overview with per-unit traffic lights."""
+    return svc.process_overview(conn)

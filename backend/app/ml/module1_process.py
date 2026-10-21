@@ -20,18 +20,26 @@ need a live DCS/Historian connection (FR-M1-01 genuinely does, and stays
   80/20 chronological split (see docs/SRS.md section 4 for the 80/20
   cross-validation requirement).
 
-Honesty note on the KPI: the synthetic generator (scripts/
-generate_synthetic_data.py) does not emit the FI-301 product-flow tag.
-``synthetic.py`` builds an engineered proxy,
-``product_flow_kg_h = feed_flow_kg_h * (mtbe_purity_pct / 100)`` — a
-simple yield-adjusted mass balance. Because feed_flow_kg_h is both one of
-the 5 regressors AND the dominant term of that proxy, this measured R^2
-is somewhat inflated relative to what an independently-measured FI-301
-tag would give; it still reflects a real, physically-expected
-relationship (more feed -> more product), it is just not independent
+Honesty note on the KPI: FI-301 (``product_flow_kg_h``) is now a REAL
+mass-balance co-product computed by the shared digital-twin core
+(``backend/app/ml/digital_twin.py``) rather than the old engineered
+proxy ``feed_flow_kg_h * (mtbe_purity_pct / 100)``. Because
+``feed_flow_kg_h`` is both one of the 5 regressors here AND a direct
+input to that mass balance (isobutene fed -> isobutene reacted -> product
+mass), this measured R^2 is still somewhat inflated relative to what an
+independently-measured FI-301 tag would give — the mass balance is a
+real physical relationship (not a tautology), it is just not independent
 evidence of the *other* 4 regressors' predictive value on their own. The
 API response and docs/SRS.md say this plainly rather than presenting the
-number as if FI-301 were measured.
+number as if FI-301 were an independently-measured tag.
+
+``train_mek_productivity_correlation`` below is the analogous FR-M1-03
+analysis for the MEK unit (added with the digital-twin work): it
+correlates the MEK unit's own process variables against real MEK
+production (also a mass-balance quantity, from the two-stage
+hydration/dehydrogenation model in digital_twin.py), reported as a
+SEPARATE regression rather than mixed into the MTBE one, because the two
+units' feeds/products are physically unrelated quantities.
 """
 from __future__ import annotations
 
@@ -50,8 +58,25 @@ CORRELATION_FEATURES = [
     "feed_flow_kg_h",
     "meoh_isobutene_ratio",
     "energy_intensity_GJ_t",
+    # AI-105 — added with the digital-twin work: FI-301 is now a REAL mass
+    # balance driven directly by the feed's isobutene content, so leaving
+    # this out (as the pre-twin proxy-based version of this list did)
+    # starves the regression of one of the new target's actual causal
+    # inputs and tanks R^2 for no physical reason — not because the
+    # relationship got weaker, but because a real driver was omitted.
+    "isobutene_feed_pct",
 ]
 PRODUCTIVITY_TARGET = "product_flow_kg_h"
+
+# FR-M1-03 for the MEK unit — see module docstring.
+MEK_CORRELATION_FEATURES = [
+    "hydration_temp_C",
+    "dehydrogenation_temp_C",
+    "mek_butene_feed_kg_h",
+    "hydration_conversion_pct",
+    "dehydrogenation_conversion_pct",
+]
+MEK_PRODUCTIVITY_TARGET = "mek_production_kg_h"
 
 
 @dataclass
@@ -105,10 +130,10 @@ def compute_operating_envelopes(df) -> dict[str, TagEnvelope]:
     return out
 
 
-def train_productivity_correlation(df) -> ProductivityCorrelation:
+def _train_correlation(df, features: list[str], target: str) -> ProductivityCorrelation:
     train_idx, test_idx = chronological_split(len(df))
-    X = df[CORRELATION_FEATURES].to_numpy()
-    y = df[PRODUCTIVITY_TARGET].to_numpy()
+    X = df[features].to_numpy()
+    y = df[target].to_numpy()
     X_train, X_test = X[train_idx], X[test_idx]
     y_train, y_test = y[train_idx], y[test_idx]
 
@@ -118,12 +143,22 @@ def train_productivity_correlation(df) -> ProductivityCorrelation:
     r2_test = r2_score(y_test, model.predict(X_test))
 
     return ProductivityCorrelation(
-        target=PRODUCTIVITY_TARGET,
-        features=list(CORRELATION_FEATURES),
-        coefficients={f: round(float(c), 6) for f, c in zip(CORRELATION_FEATURES, model.coef_)},
+        target=target,
+        features=list(features),
+        coefficients={f: round(float(c), 6) for f, c in zip(features, model.coef_)},
         intercept=round(float(model.intercept_), 6),
         r2_train=round(float(r2_train), 4),
         r2_test=round(float(r2_test), 4),
         n_train=int(train_idx.stop - (train_idx.start or 0)),
         n_test=int(len(df) - (test_idx.start or 0)),
     )
+
+
+def train_productivity_correlation(df) -> ProductivityCorrelation:
+    """FR-M1-03 for the MTBE unit — see module docstring's honesty note."""
+    return _train_correlation(df, CORRELATION_FEATURES, PRODUCTIVITY_TARGET)
+
+
+def train_mek_productivity_correlation(df) -> ProductivityCorrelation:
+    """FR-M1-03 for the MEK unit — see module docstring."""
+    return _train_correlation(df, MEK_CORRELATION_FEATURES, MEK_PRODUCTIVITY_TARGET)

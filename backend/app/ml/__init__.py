@@ -10,9 +10,16 @@ anticipated situation for this phase, and the per-requirement status
 table in docs/SRS.md section 3.1 for what is and is not measured.
 
 Layout:
+  digital_twin.py   the shared physics-informed digital-twin core for
+                 ALL process streams (MTBE, Raffinate-2, MEK) — both the
+                 bulk training-frame generator and a live-stepping
+                 ``DigitalTwinState``. See its module docstring for the
+                 honesty framing on what is SRS-sourced vs. this
+                 repository's own engineering assumptions (notably the
+                 whole MEK unit).
   synthetic.py   training-data generation (wraps/extends the official
-                 generator; also builds the engineered feature columns
-                 shared by modules 1 and 3).
+                 generator via digital_twin.py; also builds the
+                 engineered feature columns shared by modules 1 and 3).
   module1_process.py   FR-M1 operating envelope + 95% CI, multivariate
                         correlation/R^2 against a productivity proxy.
   module2_energy.py    FR-M2 ISO-50001-style EnB regression baseline,
